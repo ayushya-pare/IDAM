@@ -1,4 +1,5 @@
-echo "data/" > .gitignore
-echo "results/" >> .gitignore
-echo "*.pyc" >> .gitignore
-echo "__pycache__/" >> .gitignore
+data/
+results/
+*.pyc
+__pycache__/
+venv_idam/
