@@ -8,6 +8,6 @@
 #SBATCH --exclusive
 
 echo "script started"
-pip3 install -r requirements.txt
+source venv_idam/bin/activate
 python3 notebooks/2D_Loss.py
 echo "script finished"

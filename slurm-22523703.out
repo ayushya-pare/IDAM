@@ -1,0 +1,14 @@
+script started
+
+=== Optimizer Metrics ===
+          runtime_sec  gradient_evals  final_loss
+SGD          0.000650           100.0   -1.101083
+Momentum     0.000651           100.0   -1.100474
+AdaGrad      0.000782           100.0    7.676787
+Adam         0.001069           100.0   -1.098099
+IDAM         0.000740           100.0   -1.101083
+
+Saved metrics to results/optimizer_metrics.csv
+Saved loss history plot to results/loss_over_iterations.png
+Saved trajectories plot to results/optimizer_trajectories.png
+script finished
