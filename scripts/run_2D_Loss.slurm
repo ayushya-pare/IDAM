@@ -11,3 +11,4 @@ echo "script started"
 source venv_idam/bin/activate
 python3 notebooks/2D_Loss.py
 echo "script finished"
+

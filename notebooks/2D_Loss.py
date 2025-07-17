@@ -25,7 +25,7 @@ def gradient(theta):
     return np.array([dx, dy])
 
 # ========================================
-# 2. Optimization Engine
+# 2. Optimization
 # ========================================
 
 def run_optimization(methods, lr=0.05, steps=100, beta=0.9, alpha=0.1, eps=1e-8):
@@ -91,7 +91,7 @@ def run_optimization(methods, lr=0.05, steps=100, beta=0.9, alpha=0.1, eps=1e-8)
     return metrics, trajectories, loss_histories
 
 # ========================================
-# 3. Plotting and Output Functions
+# 3. Plotting
 # ========================================
 
 def plot_loss_history(loss_histories, output_dir="results"):
@@ -142,7 +142,7 @@ def plot_trajectories(trajectories, output_dir="results"):
     print(f"Saved trajectories plot to {output_path}")
 
 # ========================================
-# 4. Main Execution Block
+# 4. Main Block
 # ========================================
 
 def main():

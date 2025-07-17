@@ -1,4 +1,8 @@
-numpy 
+numpy
 pandas
-matplotlib
 torch
+transformers
+datasets
+peft
+accelerate
+scikit-learn
