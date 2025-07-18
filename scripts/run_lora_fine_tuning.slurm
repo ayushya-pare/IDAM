@@ -15,40 +15,39 @@
 #SBATCH --error=results/job_output_%A_%a.err
 
 # --- Setup ---
-# This job array will run two tasks, one for each optimizer.
 # Task 0: AdamW
 # Task 1: IDAM
 
+
+# Activate virtual environment
+source ../venv_idam/bin/activate
+
 echo "======================================================"
-echo "Job ID: $SLURM_JOB_ID, Task ID: $SLURM_ARRAY_TASK_ID"
-echo "Running on host: $(hostname)"
+echo "Job started"
 echo "======================================================"
 
-# Activate your Python virtual environment
-source venv/bin/activate
 
 # --- Run the appropriate training script based on the task ID ---
 case $SLURM_ARRAY_TASK_ID in
   0)
-    # This is the first job (ID=0), run with AdamW
     echo "Running experiment with AdamW optimizer"
-    python scripts/train_comparison.py \
+    python scripts/train_lora.py \
       --optimizer AdamW \
       --lr 1e-4 \
       --batch_size 32 \
-      --epochs 3
+      --epochs 5
     ;;
   1)
-    # This is the second job (ID=1), run with IDAM
     echo "Running experiment with IDAM optimizer"
-    python scripts/train_comparison.py \
+    python scripts/train_lora.py \
       --optimizer IDAM \
-      --lr 0.05 \
+      --lr 0.1 \
       --batch_size 32 \
-      --epochs 3
+      --epochs 5
     ;;
 esac
 
 echo "======================================================"
 echo "Job finished"
 echo "======================================================"
+

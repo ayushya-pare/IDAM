@@ -1,5 +1,5 @@
 # File: scripts/train_comparison.py
-# Description: A unified script to fine-tune DistilBERT on SST-2 using either AdamW or IDAM.
+# Description: A unified script to fine-tune DistilBERT on SST-2 using either AdamW or IDAM, with early stopping.
 
 import os
 import time
@@ -13,6 +13,10 @@ from sklearn.metrics import accuracy_score
 from torch.utils.data import DataLoader
 from tqdm import tqdm
 from torch.cuda.amp import autocast, GradScaler
+import warnings
+
+# Suppress the specific UserWarning from torch.compile
+warnings.filterwarnings("ignore", message="Online softmax is disabled on the fly*")
 
 # ========================================
 # 1. IDAM Optimizer 
@@ -117,9 +121,11 @@ def main():
     # Specify the optimizer and its learning rate
     parser = argparse.ArgumentParser(description="Fine-tune a transformer with LoRA.")
     parser.add_argument("--optimizer", type=str, required=True, choices=["AdamW", "IDAM"], help="Optimizer to use.")
-    parser.add_argument("--epochs", type=int, default=3, help="Number of training epochs.")
+    parser.add_argument("--epochs", type=int, default=3, help="Maximum number of training epochs.")
     parser.add_argument("--batch_size", type=int, default=32, help="Batch size.")
     parser.add_argument("--lr", type=float, default=1e-4, help="Learning rate for AdamW or base LR (alpha) for IDAM.")
+    # Add new argument for early stopping patience
+    parser.add_argument("--patience", type=int, default=1, help="Number of epochs to wait for improvement before stopping.")
     args = parser.parse_args()
 
     # --- Setup ---
@@ -146,8 +152,8 @@ def main():
     tokenized_datasets = tokenized_datasets.rename_column("label", "labels")
     tokenized_datasets.set_format("torch")
 
-    train_dataloader = DataLoader(tokenized_datasets["train"], shuffle=True, batch_size=args.batch_size)
-    eval_dataloader = DataLoader(tokenized_datasets["validation"], batch_size=args.batch_size)
+    train_dataloader = DataLoader(tokenized_datasets["train"], shuffle=True, batch_size=args.batch_size, num_workers = 8, pin_memory=True)
+    eval_dataloader = DataLoader(tokenized_datasets["validation"], batch_size=args.batch_size,num_workers=8, pin_memory=True)
 
     # --- Model Setup with LoRA ---
     lora_config = LoraConfig(
@@ -160,6 +166,7 @@ def main():
     model = AutoModelForSequenceClassification.from_pretrained(model_name, num_labels=2)
     model = get_peft_model(model, lora_config)
     model.to(device)
+    model=torch.compile(model)
     model.print_trainable_parameters()
     
     # --- Optimizer and Scheduler Setup ---
@@ -176,12 +183,15 @@ def main():
         num_training_steps=num_training_steps
     )
 
-    # Initialize the gradient scaler for mixed precision
     scaler = GradScaler()
 
-    # --- Training Loop ---
+    # --- Early Stopping and Training Loop Setup ---
     results = []
     total_training_time = 0
+    best_val_accuracy = 0.0
+    epochs_no_improve = 0
+    #adapter_path = os.path.join(output_dir, f"adapter_{args.optimizer}")
+
     for epoch in range(args.epochs):
         print(f"\n--- Epoch {epoch + 1}/{args.epochs} ---")
         train_loss, epoch_duration = train_epoch(model, train_dataloader, optimizer, lr_scheduler, device, scaler)
@@ -197,16 +207,31 @@ def main():
             "epoch_duration_sec": epoch_duration
         })
 
+        # --- Early Stopping Logic ---
+        if val_accuracy > best_val_accuracy:
+            print(f"Validation accuracy improved from {best_val_accuracy:.4f} to {val_accuracy:.4f}. Saving model.")
+            best_val_accuracy = val_accuracy
+            epochs_no_improve = 0
+            # Save the best performing adapter
+#            model.save_pretrained(adapter_path)
+        else:
+            epochs_no_improve += 1
+            print(f"Validation accuracy did not improve. Patience: {epochs_no_improve}/{args.patience}")
+
+        if epochs_no_improve >= args.patience:
+            print(f"\nEarly stopping triggered after {args.patience} epochs with no improvement.")
+            break
+
     # --- Save Results ---
     results_df = pd.DataFrame(results)
-    # Add a summary row for total time
     summary = pd.DataFrame([{"epoch": "total", "epoch_duration_sec": total_training_time}])
     results_df = pd.concat([results_df, summary], ignore_index=True)
 
-    output_filename = os.path.join(output_dir, f"results_{args.optimizer}.csv")
-    results_df.to_csv(output_filename, index=False)
-    print(f"\n--- Experiment Complete ---")
-    print(f"Saved final results to {output_filename}")
+    #output_filename = os.path.join(output_dir, f"results_{args.optimizer}.csv")
+    #results_df.to_csv(output_filename, index=False)
+    #print(f"\n--- Experiment Complete ---")
+   # print(f"Saved final results to {output_filename}")
+   # print(f"Best adapter for {args.optimizer} saved to {adapter_path}")
 
 if __name__ == "__main__":
     main()
