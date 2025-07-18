@@ -15,28 +15,39 @@
 #SBATCH --error=results/job_output_%A_%a.err
 
 # --- Setup ---
-# Define the optimizers to test
-OPTIMIZERS=(AdamW IDAM)
-
-# Select the optimizer for the current array task
-CURRENT_OPTIMIZER=${OPTIMIZERS[$SLURM_ARRAY_TASK_ID]}
+# This job array will run two tasks, one for each optimizer.
+# Task 0: AdamW
+# Task 1: IDAM
 
 echo "======================================================"
-echo "Starting SLURM job"
-echo "Job ID: $SLURM_JOB_ID"
-echo "Array Task ID: $SLURM_ARRAY_TASK_ID"
-echo "Optimizer: $CURRENT_OPTIMIZER"
+echo "Job ID: $SLURM_JOB_ID, Task ID: $SLURM_ARRAY_TASK_ID"
 echo "Running on host: $(hostname)"
-echo "CUDA_VISIBLE_DEVICES: $CUDA_VISIBLE_DEVICES"
 echo "======================================================"
 
-# --- Run the training script ---
-source venv_idam/bin/activate
-python scripts/train_lora.py --optimizer $CURRENT_OPTIMIZER
+# Activate your Python virtual environment
+source venv/bin/activate
 
-source venv_idam/bin/activate
-python3 notebooks/2D_Loss.py
-echo "script finished"
+# --- Run the appropriate training script based on the task ID ---
+case $SLURM_ARRAY_TASK_ID in
+  0)
+    # This is the first job (ID=0), run with AdamW
+    echo "Running experiment with AdamW optimizer"
+    python scripts/train_comparison.py \
+      --optimizer AdamW \
+      --lr 1e-4 \
+      --batch_size 32 \
+      --epochs 3
+    ;;
+  1)
+    # This is the second job (ID=1), run with IDAM
+    echo "Running experiment with IDAM optimizer"
+    python scripts/train_comparison.py \
+      --optimizer IDAM \
+      --lr 0.05 \
+      --batch_size 32 \
+      --epochs 3
+    ;;
+esac
 
 echo "======================================================"
 echo "Job finished"
