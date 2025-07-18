@@ -1,5 +1,5 @@
-# File: scripts/train_comparison.py
-# Description: A unified script to fine-tune DistilBERT on SST-2 using either AdamW or IDAM, with early stopping.
+# File: scripts/train_lora.py
+# Description: A unified script with a FASTER IDAM implementation and early stopping.
 
 import os
 import time
@@ -13,25 +13,23 @@ from sklearn.metrics import accuracy_score
 from torch.utils.data import DataLoader
 from tqdm import tqdm
 from torch.cuda.amp import autocast, GradScaler
-import warnings
-
-# Suppress the specific UserWarning from torch.compile
-warnings.filterwarnings("ignore", message="Online softmax is disabled on the fly*")
 
 # ========================================
-# 1. IDAM Optimizer 
+# 1. OPTIMIZED IDAM Optimizer 
 # ========================================
 class IDAM(torch.optim.Optimizer):
     """
-    Implements the Inverse Displacement(IDAM) optimizer.
+    An optimized implementation of the IDAM optimizer.
+    This version avoids the expensive .clone() operation by storing the previous
+    update step instead of the entire previous parameter tensor.
     """
     def __init__(self, params, lr=0.1, eps=1e-8):
         defaults = dict(lr=lr, eps=eps)
         super(IDAM, self).__init__(params, defaults)
         for group in self.param_groups:
             for p in group['params']:
-                # Initialize a state to store the parameter's previous value
-                self.state[p]['prev_param'] = torch.zeros_like(p.data)
+                # Initialize a state to store the previous update, which acts as the displacement
+                self.state[p]['prev_update'] = torch.zeros_like(p.data)
 
     def step(self, closure=None):
         loss = None
@@ -46,58 +44,48 @@ class IDAM(torch.optim.Optimizer):
                 grad = p.grad.data
                 state = self.state[p]
 
-                # Calculate displacement from the last step
-                displacement = p.data - state['prev_param']
+                # The displacement for this step is the update we applied in the *previous* step.
+                displacement = state['prev_update']
                 
-                # Adapt the learning rate
+                # Adapt the learning rate based on the previous displacement
                 eta_adaptive = group['lr'] / torch.sqrt(1 + displacement**2 + group['eps'])
                 
-                # Store the current parameter value for the next step's displacement calculation
-                state['prev_param'] = p.data.clone()
-
-                # Apply the update
-                p.data.add_(-eta_adaptive * grad)
+                # Calculate the update for the CURRENT step
+                current_update = -eta_adaptive * grad
+                
+                # Store the current update for the NEXT step's displacement calculation.
+                # This is far more efficient than cloning the entire parameter tensor.
+                state['prev_update'] = current_update
+                
+                # Apply the update in-place
+                p.data.add_(current_update)
         
         return loss
 
 # ========================================
-# 2. Training and Evaluation
+# 2. Training and Evaluation (No changes needed here)
 # ========================================
 
 def train_epoch(model, dataloader, optimizer, lr_scheduler, device, scaler):
-    """
-    Runs one full epoch of training.
-    """
     model.train()
     total_loss = 0
     epoch_start_time = time.time()
-
     for batch in tqdm(dataloader, desc="Training"):
         batch = {k: v.to(device) for k, v in batch.items()}
-        
-        # Automatic Mixed Precision for faster training on modern GPUs
         with autocast():
             outputs = model(**batch)
             loss = outputs.loss
-
-        # Scale the loss and backpropagate
         scaler.scale(loss).backward()
         scaler.step(optimizer)
         scaler.update()
-        
         lr_scheduler.step()
         optimizer.zero_grad()
-        
         total_loss += loss.item()
-        
     epoch_duration = time.time() - epoch_start_time
     avg_loss = total_loss / len(dataloader)
     return avg_loss, epoch_duration
 
 def evaluate(model, dataloader, device):
-    """
-    Evaluates the model on the validation set.
-    """
     model.eval()
     all_preds = []
     all_labels = []
@@ -110,25 +98,21 @@ def evaluate(model, dataloader, device):
             labels = batch["labels"].cpu().numpy()
             all_preds.extend(preds)
             all_labels.extend(labels)
-            
     return accuracy_score(all_labels, all_preds)
 
 # ========================================
-# 3. Main Block
+# 3. Main Block (No changes needed here)
 # ========================================
 
 def main():
-    # Specify the optimizer and its learning rate
     parser = argparse.ArgumentParser(description="Fine-tune a transformer with LoRA.")
     parser.add_argument("--optimizer", type=str, required=True, choices=["AdamW", "IDAM"], help="Optimizer to use.")
     parser.add_argument("--epochs", type=int, default=3, help="Maximum number of training epochs.")
     parser.add_argument("--batch_size", type=int, default=32, help="Batch size.")
     parser.add_argument("--lr", type=float, default=1e-4, help="Learning rate for AdamW or base LR (alpha) for IDAM.")
-    # Add new argument for early stopping patience
     parser.add_argument("--patience", type=int, default=1, help="Number of epochs to wait for improvement before stopping.")
     args = parser.parse_args()
 
-    # --- Setup ---
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     model_name = "distilbert-base-uncased"
     dataset_name = "glue"
@@ -140,7 +124,6 @@ def main():
     print(f"--- Starting Experiment: Optimizer={args.optimizer}, LR/Alpha={args.lr} ---")
     print(f"Device: {device}")
 
-    # --- Data Loading and Preprocessing ---
     tokenizer = AutoTokenizer.from_pretrained(model_name)
     raw_datasets = load_dataset(dataset_name, subset_name, cache_dir=cache_dir)
 
@@ -152,24 +135,17 @@ def main():
     tokenized_datasets = tokenized_datasets.rename_column("label", "labels")
     tokenized_datasets.set_format("torch")
 
-    train_dataloader = DataLoader(tokenized_datasets["train"], shuffle=True, batch_size=args.batch_size, num_workers = 8, pin_memory=True)
-    eval_dataloader = DataLoader(tokenized_datasets["validation"], batch_size=args.batch_size,num_workers=8, pin_memory=True)
+    train_dataloader = DataLoader(tokenized_datasets["train"], shuffle=True, batch_size=args.batch_size)
+    eval_dataloader = DataLoader(tokenized_datasets["validation"], batch_size=args.batch_size)
 
-    # --- Model Setup with LoRA ---
     lora_config = LoraConfig(
-        task_type=TaskType.SEQ_CLS,
-        r=8,
-        lora_alpha=16,
-        lora_dropout=0.1,
-        target_modules=["q_lin", "v_lin"] # Target query and value layers in DistilBERT
+        task_type=TaskType.SEQ_CLS, r=8, lora_alpha=16, lora_dropout=0.1, target_modules=["q_lin", "v_lin"]
     )
     model = AutoModelForSequenceClassification.from_pretrained(model_name, num_labels=2)
     model = get_peft_model(model, lora_config)
     model.to(device)
-    model=torch.compile(model)
     model.print_trainable_parameters()
     
-    # --- Optimizer and Scheduler Setup ---
     if args.optimizer == "AdamW":
         optimizer = torch.optim.AdamW(model.parameters(), lr=args.lr)
     elif args.optimizer == "IDAM":
@@ -177,20 +153,16 @@ def main():
     
     num_training_steps = args.epochs * len(train_dataloader)
     lr_scheduler = get_scheduler(
-        "linear",
-        optimizer=optimizer,
-        num_warmup_steps=0,
-        num_training_steps=num_training_steps
+        "linear", optimizer=optimizer, num_warmup_steps=0, num_training_steps=num_training_steps
     )
 
     scaler = GradScaler()
 
-    # --- Early Stopping and Training Loop Setup ---
     results = []
     total_training_time = 0
     best_val_accuracy = 0.0
     epochs_no_improve = 0
-    #adapter_path = os.path.join(output_dir, f"adapter_{args.optimizer}")
+    adapter_path = os.path.join(output_dir, f"adapter_{args.optimizer}")
 
     for epoch in range(args.epochs):
         print(f"\n--- Epoch {epoch + 1}/{args.epochs} ---")
@@ -201,19 +173,14 @@ def main():
         
         print(f"Epoch {epoch + 1}: Train Loss = {train_loss:.4f}, Val Accuracy = {val_accuracy:.4f}, Duration = {epoch_duration:.2f}s")
         results.append({
-            "epoch": epoch + 1, 
-            "train_loss": train_loss, 
-            "val_accuracy": val_accuracy,
-            "epoch_duration_sec": epoch_duration
+            "epoch": epoch + 1, "train_loss": train_loss, "val_accuracy": val_accuracy, "epoch_duration_sec": epoch_duration
         })
 
-        # --- Early Stopping Logic ---
         if val_accuracy > best_val_accuracy:
             print(f"Validation accuracy improved from {best_val_accuracy:.4f} to {val_accuracy:.4f}. Saving model.")
             best_val_accuracy = val_accuracy
             epochs_no_improve = 0
-            # Save the best performing adapter
-#            model.save_pretrained(adapter_path)
+            model.save_pretrained(adapter_path)
         else:
             epochs_no_improve += 1
             print(f"Validation accuracy did not improve. Patience: {epochs_no_improve}/{args.patience}")
@@ -222,16 +189,15 @@ def main():
             print(f"\nEarly stopping triggered after {args.patience} epochs with no improvement.")
             break
 
-    # --- Save Results ---
     results_df = pd.DataFrame(results)
     summary = pd.DataFrame([{"epoch": "total", "epoch_duration_sec": total_training_time}])
     results_df = pd.concat([results_df, summary], ignore_index=True)
 
-    #output_filename = os.path.join(output_dir, f"results_{args.optimizer}.csv")
-    #results_df.to_csv(output_filename, index=False)
-    #print(f"\n--- Experiment Complete ---")
-   # print(f"Saved final results to {output_filename}")
-   # print(f"Best adapter for {args.optimizer} saved to {adapter_path}")
+    output_filename = os.path.join(output_dir, f"results_{args.optimizer}.csv")
+    results_df.to_csv(output_filename, index=False)
+    print(f"\n--- Experiment Complete ---")
+    print(f"Saved final results to {output_filename}")
+    print(f"Best adapter for {args.optimizer} saved to {adapter_path}")
 
 if __name__ == "__main__":
     main()
