@@ -6,4 +6,4 @@ __pycache__/
 venv_idam/
 .python-version
 .ipynb_checkpoints
-
+wandb/
