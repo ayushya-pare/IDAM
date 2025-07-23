@@ -7,3 +7,4 @@ peft
 accelerate
 scikit-learn
 wandb
+torchvision
