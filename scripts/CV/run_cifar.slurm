@@ -1,21 +1,15 @@
 #!/bin/bash
 #SBATCH --job-name=cifar_hpo
-#SBATCH --output=results/CV/cifar_hpo_%A_%a.out
+##SBATCH --output=results/CV/cifar_hpo_%A_%a.out
 #SBATCH --error=results/CV/cifar_hpo_%A_%a.err
-#SBATCH --partition=sgpu_devel
+#SBATCH --partition=mlgpu_devel
 #SBATCH --gres=gpu:1
-#SBATCH --time=01:00:00
-#SBATCH --array=0-7
-
-# --- HPO Grid Search Setup ---
-# We will test 8 combinations in total.
-# 2 learning rates for each of the 4 optimizers.
-
+#SBATCH --time=00:20:00
+##SBATCH --array=0-1
 
 # Define the hyperparameter search space
-OPTIMIZERS=('SGD' 'IDAM' 'IDAM' 'IDAM' 'IDAM' 'IDAM' 'IDAM' 'IDAM')
-VARIANTS=('' 'original' 'exp' 'tanh' 'log' 'sigmoid' 'cos' 'double_exp')
-LEARNING_RATES=(0.1 0.1 0.1 0.1 0.1 0.1 0.1 0.1)
+OPTIMIZERS=('IDAM')
+LEARNING_RATES=(0.1)
 
 
 # Get the configuration for the current job
@@ -34,18 +28,14 @@ echo "--------------------------------"
 source ../venv_idam/bin/activate
 
 # Remove previous results
-rm results/CV/*
+#rm results/CV/*
 
 # Construct the command
 CMD="python scripts/CV/train_cifar.py \
     --optimizer $CURRENT_OPTIMIZER \
     --lr $CURRENT_LR \
-    --wandb_project 'idam-cifar100-variants'"
+    --wandb_project 'cifar-100-benchmark'"
 
-# Add the variant flag only if it's an IDAM run
-if [ "$CURRENT_OPTIMIZER" == "IDAM" ]; then
-    CMD="$CMD --idam_variant $CURRENT_VARIANT"
-fi
 
 # Execute the command
 eval $CMD
