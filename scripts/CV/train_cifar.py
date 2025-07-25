@@ -31,7 +31,7 @@ class IDAM(torch.optim.Optimizer):
             lr = group['lr']
             eps = group['eps']
             # Hyperparameters for exponential LR adaptation
-            gamma = 10.0     # sensitivity to displacement
+            gamma = 0.1     # sensitivity to displacement
             mu = 0.1         # target displacement magnitude
             lr_min = 1e-3
             lr_max = 1.0
@@ -42,8 +42,8 @@ class IDAM(torch.optim.Optimizer):
                 if p.grad is None:
                     continue
                 grad = p.grad.data
-                if group['weight_decay'] > 0.0:
-                    grad = grad.add(p.data, alpha=group['weight_decay'])
+                #if group['weight_decay'] > 0.0:
+                #    grad = grad.add(p.data, alpha=group['weight_decay'])
 
                 state = self.state[p]
                 displacement = state.get('prev_update', torch.zeros_like(p.data))
@@ -62,17 +62,36 @@ class IDAM(torch.optim.Optimizer):
                 # === Initialize eta_adaptive if not present ===
                 if 'eta_adaptive' not in state:
                     state['eta_adaptive'] = torch.full_like(p.data, base_lr)
+               
+               
+               
+                eta_prev = state['eta_adaptive']
+               
+                #eta_adaptive = (eta_prev/(1-displacement**2)).clamp(min=lr_min,max=lr_max)
+                eta_adaptive = (eta_prev * (1 - gamma * displacement**2)).clamp(min=lr_min, max=lr_max)
+
+                state['eta_adaptive'] = eta_adaptive
                 
                 # === Recursive per-element adaptive learning rate ===
-                eta_prev = state['eta_adaptive']
-                update_factor = torch.exp(-gamma * (displacement**2 - mu))
-                eta_adaptive = (eta_prev * update_factor).clamp(min=lr_min, max=lr_max)
-                state['eta_adaptive'] = eta_adaptive 
+                #eta_prev = state['eta_adaptive']
+                #update_factor = torch.exp(-gamma * (displacement**2 - mu))
+                #eta_adaptive = (eta_prev * update_factor).clamp(min=lr_min, max=lr_max)
+                #state['eta_adaptive'] = eta_adaptive 
+
+
+                # --- Tanh-based adaptive LR update ---
+#                eta_prev = state['eta_adaptive']
+#                delta = gamma * (displacement**2 - mu)
+#                scale = 1 - torch.tanh(delta)
+#                eta_adaptive = (eta_prev * scale).clamp(min=lr_min, max=lr_max)
+#                state['eta_adaptive'] = eta_adaptive
+
 
                 # Perform parameter update
                 current_update = -eta_adaptive * grad
                 state['prev_update'] = current_update
                 p.data.add_(current_update)
+#               print("adaptive learning rate : ", eta_adaptive)
 
         return None
 
@@ -164,25 +183,26 @@ def main():
     elif args.optimizer == 'SGD':
         optimizer = torch.optim.SGD(model.parameters(), lr=args.lr, weight_decay=5e-4)
     elif args.optimizer == 'IDAM':
-        optimizer = IDAM(model.parameters(), lr=args.lr, weight_decay=5e-4)
+        optimizer = IDAM(model.parameters(), lr=args.lr)
 
-    scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=args.epochs)
+#    scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=args.epochs)
 
     start_time = time.time()
     for epoch in range(args.epochs):
         epoch_start_time = time.time()
         train_loss, train_acc = train_epoch(model, trainloader, optimizer, criterion, device)
         val_loss, val_acc = evaluate(model, testloader, criterion, device)
-        scheduler.step()
+        #scheduler.step()
         epoch_duration = time.time() - epoch_start_time
 
-        print(f"Epoch {epoch+1}: Train Loss: {train_loss:.3f}, Train Acc: {train_acc:.2f}% | Val Loss: {val_loss:.3f}, Val Acc: {val_acc:.2f}% | Duration: {epoch_duration:.2f}s")
+        print(f"Epoch {epoch+1}: Train Acc: {train_acc:.2f}% | Val Acc: {val_acc:.2f}% | Duration: {epoch_duration:.2f}s")
 
         wandb.log({
             "train_accuracy": train_acc,
             "val_accuracy": val_acc,
-            "adaptive_lr": eta_adaptive.mean().item()
+            #"adaptive_lr": eta_adaptive.mean().item()
             #"learning_rate": scheduler.get_last_lr()[0]
+            "epoch time": time.time()-start_time
         })
 
     total_time = time.time() - start_time

@@ -31,13 +31,9 @@ source ../venv_idam/bin/activate
 #rm results/CV/*
 
 # Construct the command
-CMD="python scripts/CV/train_cifar.py \
+python scripts/CV/train_cifar.py \
     --optimizer $CURRENT_OPTIMIZER \
     --lr $CURRENT_LR \
-    --wandb_project 'cifar-100-benchmark'"
-
-
-# Execute the command
-eval $CMD
+    --wandb_project 'cifar-100-benchmark'
 
 echo "--- Job Finished ---"
