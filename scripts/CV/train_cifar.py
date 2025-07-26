@@ -31,9 +31,9 @@ class IDAM(torch.optim.Optimizer):
             lr = group['lr']
             eps = group['eps']
             # Hyperparameters for exponential LR adaptation
-            gamma = 0.1     # sensitivity to displacement
+            gamma = 0.001     # sensitivity to displacement
             mu = 0.1         # target displacement magnitude
-            lr_min = 1e-3
+            lr_min = 1e-2
             lr_max = 1.0
             base_lr = group['lr']  # used only on first step
 
