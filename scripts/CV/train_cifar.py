@@ -15,7 +15,14 @@ import wandb
 torch.manual_seed(42)
 
 # ========================================
-# 1. Optimized IDAM Optimizer (Scalar adaptive LR per tensor)
+# 1. JIT-Fused Scalar LR Update for IDAM
+# ========================================
+def adaptive_lr_update(eta_prev: float, disp_norm: float, gamma: float, mu: float, lr_min: float, lr_max: float) -> float:
+    eta = eta_prev * (1 + gamma * math.exp(-mu * disp_norm * disp_norm))
+    return max(min(eta, lr_max), lr_min)
+
+# ========================================
+# 2. Optimized IDAM Optimizer (Scalar adaptive LR per tensor)
 # ========================================
 class IDAM(torch.optim.Optimizer):
     def __init__(self, params, lr, eps=1e-8, weight_decay=0.0, update_interval=5):
@@ -53,8 +60,7 @@ class IDAM(torch.optim.Optimizer):
 
                 if self.step_counter % self.update_interval == 0:
                     disp_norm = torch.norm(displacement).item()
-                    eta = eta_prev * (1 + gamma * math.exp(-mu * disp_norm ** 2))
-                    eta = max(min(eta, lr_max), lr_min)
+                    eta = adaptive_lr_update(eta_prev, disp_norm, gamma, mu, lr_min, lr_max)
                     state['eta_adaptive'] = eta
 
                 eta = state['eta_adaptive']
@@ -65,7 +71,7 @@ class IDAM(torch.optim.Optimizer):
         return None
 
 # ========================================
-# 2. Training and Evaluation
+# 3. Training and Evaluation
 # ========================================
 def train_epoch(model, dataloader, optimizer, criterion, device):
     model.train()
@@ -110,7 +116,7 @@ def evaluate(model, dataloader, criterion, device):
     return val_loss, val_acc
 
 # ========================================
-# 3. Main Block
+# 4. Main Block
 # ========================================
 def main():
     parser = argparse.ArgumentParser(description="CIFAR-100 Optimizer Benchmark")
@@ -118,7 +124,7 @@ def main():
     parser.add_argument("--epochs", type=int, default=80)
     parser.add_argument("--lr", type=float, default=0.01)
     parser.add_argument("--batch_size", type=int, default=128)
-    parser.add_argument("--wandb_project", type=str, default="cifar-100-benchmark")
+    parser.add_argument("--wandb_project", type=str, default="cifar100_training")
     args = parser.parse_args()
 
     run_name = f"{args.optimizer}_lr={args.lr}"
@@ -164,7 +170,7 @@ def main():
         wandb.log({
             "train_accuracy": train_acc,
             "val_accuracy": val_acc,
-            "epoch time": time.time() - start_time
+            "epoch_duration":epoch_duration
         })
 
     total_time = time.time() - start_time
