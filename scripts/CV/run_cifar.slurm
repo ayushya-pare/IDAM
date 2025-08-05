@@ -3,16 +3,17 @@
 #SBATCH --output=results/CV/cifar_hpo_%A_%a.out
 #SBATCH --error=results/CV/cifar_hpo_%A_%a.err
 
-#SBATCH --partition=sgpu_short
+#SBATCH --partition=mlgpu_devel
 #SBATCH --gres=gpu:1
-#SBATCH --cpus-per-task=4             # Number of CPU threads for data loading
+#SBATCH --cpus-per-task=8             # Number of CPU threads for data loading
 #SBATCH --mem=32G                     # Memory needed
+#SBATCH --exclusive
 #SBATCH --time=00:30:00               
-#SBATCH --array=0-2
+#SBATCH --array=0-1
 
 ## Optimizers and parameters
-OPTIMIZERS=('IDAM' 'Adam' 'SGD')
-LEARNING_RATES=(0.1 0.001 0.1)
+OPTIMIZERS=('IDAM' 'Adam')
+LEARNING_RATES=(0.1 0.001)
 
 ## Get the configuration for the current job
 CURRENT_OPTIMIZER=${OPTIMIZERS[$SLURM_ARRAY_TASK_ID]}
@@ -29,5 +30,5 @@ conda deactivate
 source ../venv_idam/bin/activate
 
 ## Construct the command
-python scripts/CV/train_cifar.py --optimizer $CURRENT_OPTIMIZER --lr $CURRENT_LR --wandb_project 'cifar100_training'
+python scripts/CV/train_cifar.py --optimizer $CURRENT_OPTIMIZER --lr $CURRENT_LR --epochs 20 --wandb_project 'cifar100_training_doover'
 echo "--- Job Finished ---"

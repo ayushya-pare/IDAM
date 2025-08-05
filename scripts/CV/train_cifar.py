@@ -15,7 +15,7 @@ import wandb
 torch.manual_seed(42)
 
 # ========================================
-# 1. JIT-Fused Scalar LR Update for IDAM
+# 1. IDAM
 # ========================================
 def adaptive_lr_update(eta_prev: float, disp_norm: float, gamma: float, mu: float, lr_min: float, lr_max: float) -> float:
     eta = eta_prev * (1 + gamma * math.exp(-mu * disp_norm * disp_norm))
@@ -124,7 +124,7 @@ def main():
     parser.add_argument("--epochs", type=int, default=80)
     parser.add_argument("--lr", type=float, default=0.01)
     parser.add_argument("--batch_size", type=int, default=128)
-    parser.add_argument("--wandb_project", type=str, default="cifar100_training")
+    parser.add_argument("--wandb_project", type=str, default="cifar100_training_doover")
     args = parser.parse_args()
 
     run_name = f"{args.optimizer}_lr={args.lr}"
@@ -180,3 +180,4 @@ def main():
 
 if __name__ == '__main__':
     main()
+
