@@ -17,58 +17,152 @@ torch.manual_seed(42)
 # ========================================
 # 1. IDAM
 # ========================================
-def adaptive_lr_update(eta_prev: float, disp_norm: float, gamma: float, mu: float, lr_min: float, lr_max: float) -> float:
-    eta = eta_prev * (1 + gamma * math.exp(-mu * disp_norm * disp_norm))
+def adaptive_lr_update(eta_prev: float,disp_norm: float, eps: float,lr_min: float = 1e-2, lr_max: float = 1.0) -> float:
+    #eta = eta_prev * (1 + gamma * math.exp(-mu * disp_norm * disp_norm))
+    eta = eta_prev/(math.sqrt(eps + disp_norm*disp_norm))
     return max(min(eta, lr_max), lr_min)
 
 # ========================================
 # 2. Optimized IDAM Optimizer (Scalar adaptive LR per tensor)
 # ========================================
 class IDAM(torch.optim.Optimizer):
-    def __init__(self, params, lr, eps=1e-8, weight_decay=0.0, update_interval=5):
-        defaults = dict(lr=lr, eps=eps, weight_decay=weight_decay)
-        super(IDAM, self).__init__(params, defaults)
-        self.step_counter = 0
+    def __init__(self, params, lr: float = 0.01, weight_decay: float = 0.0, update_interval: int = 5):
+        defaults = dict(lr=lr, weight_decay=weight_decay)
+        super().__init__(params, defaults)
+
+        # Internal state per parameter-group
         self.update_interval = update_interval
+        self.step_counter = 0
 
         for group in self.param_groups:
-            for p in group['params']:
-                state = self.state[p]
-                state['prev_update'] = torch.zeros_like(p.data)
-                state['eta_adaptive'] = lr  # Scalar LR
+            # initialize adaptive LR and previous updates list for each parameter in the group
+            group['eta_adaptive'] = group['lr']
+            group['prev_updates'] = [torch.zeros_like(p.data) for p in group['params']]
 
+    @torch.no_grad()
     def step(self):
+        """
+        Perform a single optimization step, fusing gradient updates across each parameter-group.
+        """
         self.step_counter += 1
 
         for group in self.param_groups:
+            params = []
+            grads = []
+            # collect params and grads
+            for p in group['params']:
+                if p.grad is None:
+                    continue
+                params.append(p)
+                grads.append(p.grad)
+
+            # adapt learning rate every `update_interval` steps
+            if self.step_counter % self.update_interval == 0:
+                # flatten all previous updates and compute a single displacement norm
+                flat = [u.view(-1) for u in group['prev_updates'][:len(grads)]]
+                disp_norm = torch.cat(flat).norm().item()
+                group['eta_adaptive'] = adaptive_lr_update(
+                    group['eta_adaptive'], disp_norm,
+                    eps=1e-8, lr_min=1e-2, lr_max=1.0
+                )
+
+            eta = group['eta_adaptive']
+
+            # fused compute: updates = -eta * grad for each param
+            updates = torch._foreach_mul(grads, -eta)
+            torch._foreach_add_(params, updates)
+
+            # save for next displacement calculation
+            group['prev_updates'] = [u.clone() for u in updates]    
+        return None
+
+
+# ========================================
+# 2b. custom_Adam
+# ========================================
+class custom_Adam(torch.optim.Optimizer):
+    r"""
+    Minimal, from-scratch Adam optimizer with optional AMSGrad.
+    Matches PyTorch Adam defaults/behavior for:
+      - L2 weight decay (NOT decoupled)
+      - bias-corrected moment estimates
+      - optional AMSGrad variant
+    """
+    def __init__(
+        self,
+        params,
+        lr: float = 1e-3,
+        betas=(0.9, 0.999),
+        eps: float = 1e-8,
+        weight_decay: float = 0.0,
+        amsgrad: bool = False,
+    ):
+        
+        defaults = dict(lr=lr, betas=betas, eps=eps,
+                        weight_decay=weight_decay, amsgrad=amsgrad)
+        super().__init__(params, defaults)
+
+    @torch.no_grad()
+    def step(self):
+        """
+        Perform a single optimization step.
+        """
+        for group in self.param_groups:
             lr = group['lr']
+            beta1, beta2 = group['betas']
             eps = group['eps']
-            gamma = 0.001
-            mu = 0.1
-            lr_min = 1e-2
-            lr_max = 1.0
+            wd = group['weight_decay']
+            amsgrad = group['amsgrad']
 
             for p in group['params']:
                 if p.grad is None:
                     continue
+                grad = p.grad
 
-                grad = p.grad.data
+                # Adam works with dense grads; if sparse, fallback to to_dense()
+                if grad.is_sparse:
+                    grad = grad.to_dense()
+
+                # L2 weight decay (classic, not decoupled like AdamW)
+                if wd != 0.0:
+                    grad = grad.add(p, alpha=wd)
+
                 state = self.state[p]
+                if len(state) == 0:
+                    # State initialization
+                    state['step'] = 0
+                    state['exp_avg'] = torch.zeros_like(p, memory_format=torch.preserve_format)
+                    state['exp_avg_sq'] = torch.zeros_like(p, memory_format=torch.preserve_format)
+                    if amsgrad:
+                        state['max_exp_avg_sq'] = torch.zeros_like(p, memory_format=torch.preserve_format)
 
-                eta_prev = state['eta_adaptive']
-                displacement = state['prev_update']
+                exp_avg = state['exp_avg']
+                exp_avg_sq = state['exp_avg_sq']
+                state['step'] += 1
+                t = state['step']
 
-                if self.step_counter % self.update_interval == 0:
-                    disp_norm = torch.norm(displacement).item()
-                    eta = adaptive_lr_update(eta_prev, disp_norm, gamma, mu, lr_min, lr_max)
-                    state['eta_adaptive'] = eta
+                # Exponential moving averages of gradient and its square
+                exp_avg.mul_(beta1).add_(grad, alpha=1 - beta1)
+                exp_avg_sq.mul_(beta2).addcmul_(grad, grad, value=1 - beta2)
 
-                eta = state['eta_adaptive']
-                current_update = -eta * grad
-                p.data.add_(current_update)
-                state['prev_update'].copy_(current_update)
+                if amsgrad:
+                    max_exp_avg_sq = state['max_exp_avg_sq']
+                    torch.maximum(max_exp_avg_sq, exp_avg_sq, out=max_exp_avg_sq)
+                    denom = (max_exp_avg_sq.sqrt()).add_(eps)
+                else:
+                    denom = (exp_avg_sq.sqrt()).add_(eps)
+
+                # Bias correction
+                bias_c1 = 1 - beta1 ** t
+                bias_c2 = 1 - beta2 ** t
+                step_size = lr * (bias_c2 ** 0.5) / bias_c1
+
+                # Parameter update
+                p.addcdiv_(exp_avg, denom, value=-step_size)
 
         return None
+
+
 
 # ========================================
 # 3. Training and Evaluation
@@ -120,7 +214,7 @@ def evaluate(model, dataloader, criterion, device):
 # ========================================
 def main():
     parser = argparse.ArgumentParser(description="CIFAR-100 Optimizer Benchmark")
-    parser.add_argument("--optimizer", type=str, required=True, choices=["Adam", "SGD", "IDAM"])
+    parser.add_argument("--optimizer", type=str, required=True, choices=["Adam", "SGD", "IDAM","custom_Adam"])
     parser.add_argument("--epochs", type=int, default=80)
     parser.add_argument("--lr", type=float, default=0.01)
     parser.add_argument("--batch_size", type=int, default=128)
@@ -157,6 +251,8 @@ def main():
         optimizer = torch.optim.SGD(model.parameters(), lr=args.lr, weight_decay=5e-4)
     elif args.optimizer == 'IDAM':
         optimizer = IDAM(model.parameters(), lr=args.lr)
+    elif args.optimizer == 'custom_Adam':
+        optimizer = custom_Adam(model.parameters(), lr=args.lr, weight_decay=0.01, betas=(0.9, 0.999), eps=1e-8, amsgrad=False)
 
     start_time = time.time()
     for epoch in range(args.epochs):

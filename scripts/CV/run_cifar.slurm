@@ -5,14 +5,14 @@
 
 #SBATCH --partition=mlgpu_devel
 #SBATCH --gres=gpu:1
-#SBATCH --cpus-per-task=8             # Number of CPU threads for data loading
-#SBATCH --mem=32G                     # Memory needed
+##SBATCH --cpus-per-task=8             # Number of CPU threads for data loading
+##SBATCH --mem=32G                     # Memory needed
 #SBATCH --exclusive
-#SBATCH --time=00:30:00               
+#SBATCH --time=00:20:00               
 #SBATCH --array=0-1
 
 ## Optimizers and parameters
-OPTIMIZERS=('IDAM' 'Adam')
+OPTIMIZERS=('IDAM' 'custom_Adam')
 LEARNING_RATES=(0.1 0.001)
 
 ## Get the configuration for the current job
@@ -25,7 +25,7 @@ echo "Learning Rate: $CURRENT_LR"
 echo "--------------------------------"
 
 ## Activate your environment
-module load cuda/12.6
+##module load cuda/12.6
 conda deactivate
 source ../venv_idam/bin/activate
 
