@@ -3,7 +3,6 @@ data/
 results/
 *.pyc
 __pycache__/
-venv_idam/
 .python-version
 .ipynb_checkpoints
 wandb/
