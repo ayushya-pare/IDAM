@@ -1,21 +1,3 @@
-#!/usr/bin/env python
-# coding: utf-8
-
-# In[1]:
-
-
-#print("hello")
-
-
-# In[2]:
-
-
-#!pip3 install -r /Users/ayushyapare/Ayushyas_Life/Work/Research/DeGrueter_TM_2025/IDAM/requirements.txt
-
-
-# In[5]:
-
-
 import numpy as np
 import time
 import pandas as pd
@@ -142,10 +124,8 @@ plt.xlabel("Theta 1 (x)")
 plt.ylabel("Theta 2 (y)")
 plt.legend()
 plt.grid(True)
+plt.savefig('results/2D_Loss/weight_trajectories.png')
 plt.show()
-
-
-# In[ ]:
 
 
 
