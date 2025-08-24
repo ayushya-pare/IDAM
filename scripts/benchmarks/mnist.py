@@ -1,0 +1,144 @@
+import os, time
+import torch
+from torch import nn, optim
+from torch.optim import Optimizer
+from torch.utils.data import DataLoader
+from torchvision import datasets, transforms
+
+# ----------------------------
+# Model
+# ----------------------------
+class MLP(nn.Module):
+    def __init__(self):
+        super().__init__()
+        self.fc1 = nn.Linear(784, 64)
+        self.act = nn.ReLU()
+        self.fc2 = nn.Linear(64, 10)
+        self.logsm = nn.LogSoftmax(dim=1)  # pair with NLLLoss
+
+    def forward(self, x):
+        x = x.view(x.size(0), -1)  # (N, 1, 28, 28) -> (N, 784)
+        x = self.fc1(x)
+        x = self.act(x)
+        x = self.fc2(x)
+        return self.logsm(x)
+
+# ----------------------------
+# Custom optimizer (proposed)
+# ----------------------------
+class proposed_algorithm(Optimizer):
+    """
+    First step: SGD: theta <- theta - lr * grad
+    Next: inverse-displacement + momentum
+          diff = theta - prev
+          ad_lr = lr / (|diff|^2 + 1e-2)
+          theta <- theta - ad_lr * grad + beta * diff
+    """
+    def __init__(self, params, learning_rate=1e-3):
+        super().__init__(params, dict(lr=learning_rate))
+
+    @torch.no_grad()
+    def step(self, closure=None):
+        loss = None
+        if closure is not None:
+            with torch.enable_grad():
+                loss = closure()
+
+        beta = 0.9
+        for group in self.param_groups:
+            lr = group["lr"]
+            for p in group["params"]:
+                if p.grad is None:
+                    continue
+                g = p.grad
+                state = self.state[p]
+                if "initialized" not in state:
+                    state["initialized"] = True
+                    state["prev"] = torch.zeros_like(p, memory_format=torch.preserve_format)
+                    p.add_(g, alpha=-lr)           # first: plain SGD
+                    state["prev"].copy_(p)
+                else:
+                    prev = state["prev"]
+                    diff = p - prev
+                    ad_lr = lr / (diff.abs().pow(2) + 1e-2)
+                    prev.copy_(p)
+                    p.add_(-ad_lr * g + beta * diff)
+        return loss
+
+# ----------------------------
+# Data
+# ----------------------------
+device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+print("Device:", device)
+
+transform = transforms.ToTensor()
+train_ds = datasets.MNIST(root="./data", train=True,  download=False, transform=transform)
+test_ds  = datasets.MNIST(root="./data", train=False, download=False, transform=transform)
+
+batch_size = 256
+train_loader = DataLoader(train_ds, batch_size=batch_size, shuffle=True,  num_workers=0)
+test_loader  = DataLoader(test_ds,  batch_size=batch_size, shuffle=False, num_workers=0)
+
+# ----------------------------
+# Train / Eval helpers
+# ----------------------------
+def train_one_epoch(model, optimizer, criterion, loader):
+    model.train()
+    total_loss, correct, total = 0.0, 0, 0
+    for x, y in loader:
+        x, y = x.to(device), y.to(device)
+        optimizer.zero_grad(set_to_none=True)
+        out = model(x)
+        loss = criterion(out, y)
+        loss.backward()
+        optimizer.step()
+        total_loss += loss.item() * x.size(0)
+        correct += (out.argmax(1) == y).sum().item()
+        total += x.size(0)
+    return total_loss / total, correct / total
+
+@torch.no_grad()
+def evaluate(model, criterion, loader):
+    model.eval()
+    total_loss, correct, total = 0.0, 0, 0
+    for x, y in loader:
+        x, y = x.to(device), y.to(device)
+        out = model(x)
+        loss = criterion(out, y)
+        total_loss += loss.item() * x.size(0)
+        correct += (out.argmax(1) == y).sum().item()
+        total += x.size(0)
+    return total_loss / total, correct / total
+
+def fit_model(optimizer_ctor, optimizer_kwargs, epochs=10):
+    model = MLP().to(device)
+    optimizer = optimizer_ctor(model.parameters(), **optimizer_kwargs)
+    criterion = nn.NLLLoss()
+    history = {"loss": [], "accuracy": [], "val_loss": [], "val_accuracy": []}
+    for ep in range(1, epochs + 1):
+        tr_loss, tr_acc = train_one_epoch(model, optimizer, criterion, train_loader)
+        va_loss, va_acc = evaluate(model, criterion, test_loader)
+        history["loss"].append(tr_loss); history["accuracy"].append(tr_acc)
+        history["val_loss"].append(va_loss); history["val_accuracy"].append(va_acc)
+        print(f"Epoch {ep:02d}/{epochs} | loss={tr_loss:.4f} acc={tr_acc:.4f} | val_loss={va_loss:.4f} val_acc={va_acc:.4f}")
+    return history
+
+# ----------------------------
+# Runs: SGD, Adam, Custom
+# ----------------------------
+if __name__ == "__main__":
+    print("\n=== SGD ===")
+    hist_sgd  = fit_model(optim.SGD,  dict(lr=1e-2), epochs=10)
+
+    print("\n=== Adam ===")
+    hist_adam = fit_model(optim.Adam, dict(lr=1e-3), epochs=10)
+
+    print("\n=== Custom (proposed) ===")
+    hist_custom = fit_model(proposed_algorithm, dict(learning_rate=1e-3), epochs=10)
+
+    # Tiny results summary
+    def last(h, key): return h[key][-1]
+    print("\nFinal validation:")
+    print(f"SGD    -> acc={last(hist_sgd,'val_accuracy'):.4f}, loss={last(hist_sgd,'val_loss'):.4f}")
+    print(f"Adam   -> acc={last(hist_adam,'val_accuracy'):.4f}, loss={last(hist_adam,'val_loss'):.4f}")
+    print(f"Custom -> acc={last(hist_custom,'val_accuracy'):.4f}, loss={last(hist_custom,'val_loss'):.4f}")
