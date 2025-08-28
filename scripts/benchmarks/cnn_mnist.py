@@ -5,6 +5,10 @@ from torch.optim import Optimizer
 from torch.utils.data import DataLoader
 from torchvision import datasets, transforms
 
+# NEW: plotting deps
+import numpy as np
+import matplotlib.pyplot as plt
+
 # ----------------------------
 # Model
 # ----------------------------
@@ -34,8 +38,8 @@ class proposed_algorithm(Optimizer):
           ad_lr = lr / (|diff|^2 + 1e-2)
           theta <- theta - ad_lr * grad + beta * diff
     """
-    def __init__(self, params, learning_rate=1e-3):
-        super().__init__(params, dict(lr=learning_rate))
+    def __init__(self, params, lr=1e-3):
+        super().__init__(params, dict(lr=lr))
 
     @torch.no_grad()
     def step(self, closure=None):
@@ -125,17 +129,56 @@ def fit_model(optimizer_ctor, optimizer_kwargs, epochs=10):
     return history
 
 # ----------------------------
+# Plotting helper (your function)
+# ----------------------------
+def plot_performance_simple(histories, titles):
+    # Style (matches your reference)
+    colors = ['#1f77b4', '#ff7f0e', '#2ca02c']
+    font_title  = {'family': 'serif', 'color': 'black',   'weight': 'normal', 'size': 16}
+    font_labels = {'family': 'serif', 'color': 'darkred', 'weight': 'normal', 'size': 18}
+    font_legend = {'size': 16}
+
+    # X axis (all epochs, using first history length)
+    n = len(histories[0]['loss'])
+    ep = np.arange(n)  # 0-based for plotting
+
+    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(14, 6))
+
+    ax1.set_xlabel('Epoch', fontdict=font_labels)
+    ax1.set_ylabel('Loss',  fontdict=font_labels, color='tab:red')
+    ax2.set_xlabel('Epoch', fontdict=font_labels)
+    ax2.set_ylabel('Accuracy', fontdict=font_labels, color='tab:blue')
+
+    for h, title, color in zip(histories, titles, colors):
+        # Loss panel
+        ax1.plot(ep, np.array(h['loss']),     'o-', color=color, label=f'{title} Train Loss', markersize=8)
+        ax1.plot(ep, np.array(h['val_loss']), 's--', color=color, label=f'{title} Val  Loss', markersize=8)
+        # Accuracy panel
+        ax2.plot(ep, np.array(h['accuracy']),     'o-', color=color, label=f'{title} Train Accuracy', markersize=8)
+        ax2.plot(ep, np.array(h['val_accuracy']), 's--', color=color, label=f'{title} Val  Accuracy', markersize=8)
+
+    ax1.legend(loc='upper right', prop=font_legend)
+    ax2.legend(loc='lower right', prop=font_legend)
+    ax1.title.set_text('Loss Comparison')
+    ax2.title.set_text('Accuracy Comparison')
+
+    plt.tight_layout()
+    plt.savefig('results/benchmark/cnn_mnist.png', format="png", bbox_inches="tight")
+    plt.show()
+
+# ----------------------------
 # Runs: SGD, Adam, Custom
 # ----------------------------
 if __name__ == "__main__":
+    epochs = 15
     print("\n=== SGD ===")
-    hist_sgd  = fit_model(optim.SGD,  dict(lr=1e-2), epochs=10)
+    hist_sgd  = fit_model(optim.SGD,  dict(lr=1e-2), epochs=epochs)
 
     print("\n=== Adam ===")
-    hist_adam = fit_model(optim.Adam, dict(lr=1e-3), epochs=10)
+    hist_adam = fit_model(optim.Adam, dict(lr=1e-3), epochs=epochs)
 
     print("\n=== Custom (proposed) ===")
-    hist_custom = fit_model(proposed_algorithm, dict(learning_rate=1e-3), epochs=10)
+    hist_custom = fit_model(proposed_algorithm, dict(lr=1e-3), epochs=epochs)
 
     # Tiny results summary
     def last(h, key): return h[key][-1]
@@ -143,3 +186,11 @@ if __name__ == "__main__":
     print(f"SGD    -> acc={last(hist_sgd,'val_accuracy'):.4f}, loss={last(hist_sgd,'val_loss'):.4f}")
     print(f"Adam   -> acc={last(hist_adam,'val_accuracy'):.4f}, loss={last(hist_adam,'val_loss'):.4f}")
     print(f"Custom -> acc={last(hist_custom,'val_accuracy'):.4f}, loss={last(hist_custom,'val_loss'):.4f}")
+
+    # ----------------------------
+    # Plot all three runs
+    # ----------------------------
+    plot_performance_simple(
+        histories=[hist_sgd, hist_adam, hist_custom],
+        titles=["SGD", "Adam", "Custom"]
+    )
